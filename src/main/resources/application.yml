@@ -13,6 +13,8 @@ spring:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
   # 关键：springfox 3.0 在 Spring Boot 2.6+ 需要改为 ant_path_matcher，否则启动报 NPE
+  profiles:
+    active: local
   mvc:
     pathmatch:
       matching-strategy: ant_path_matcher

@@ -176,10 +176,10 @@ WHERE id = ? AND available_count > 0
 | code | 含义 |
 | --- | --- |
 | 200 | 成功 |
-| 400 | 参数校验失败 |
+| 400 | 业务规则拒绝（库存不足、重复借阅、用户名已存在等）或参数校验失败 |
 | 401 | 未登录或 token 无效/过期 |
 | 403 | 已登录但无权限 |
-| 500 | 业务异常 / 系统异常 |
+| 500 | 系统异常（未预期的服务端错误） |
 
 > 说明：本项目所有异常（含未登录、无权限）统一以 HTTP 200 + 业务码返回，由前端根据 `code` 判断。
 > 好处是前端只需处理一套响应结构；代价是无法利用 HTTP 语义与浏览器/网关的默认行为（如 401 自动跳登录）。
@@ -246,3 +246,7 @@ ORDER BY r.id DESC;
 - **启动报 NPE（springfox）**：`application.yml` 已配置 `spring.mvc.pathmatch.matching-strategy: ant_path_matcher`，请勿删除（springfox 3.0 在 Spring Boot 2.6+ 的已知兼容问题）。
 - **登录返回 500 且日志提示 `WeakKeyException`**：`jwt.secret` 长度不足 32 字节，请配置足够长的随机密钥。
 - **返回 403**：当前账号角色与接口要求不符（例如用普通用户调用图书管理接口）。
+- **启动报 `Access denied for user 'your_username'@'localhost'`**：
+  说明 `application.yml` 中的占位符未被覆盖。请创建 `application-local.yml`
+  （已加入 .gitignore）配置真实账号密码，并激活 `local` profile
+  （`--spring.profiles.active=local` 或 IDEA 的 Active profiles）。

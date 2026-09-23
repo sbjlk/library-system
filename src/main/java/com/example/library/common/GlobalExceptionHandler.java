@@ -39,9 +39,8 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public Result<Void> handleException(Exception e) {
+        // 完整堆栈只写日志；响应体返回通用提示，避免把数据库/框架内部信息暴露给前端
         log.error("系统异常", e);
-        return Result.fail(ResultCode.ERROR.getCode(), "系统繁忙，请稍后再试" );
+        return Result.fail(ResultCode.ERROR.getCode(), "系统繁忙，请稍后再试");
     }
 }
-
-

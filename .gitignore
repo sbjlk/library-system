@@ -13,3 +13,7 @@ src/main/resources/application-local.properties
 
 ### 日志 ###
 *.log
+
+### 压测产物 ###
+jmeter-*.csv
+*.jtl

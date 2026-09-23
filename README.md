@@ -214,7 +214,7 @@ WHERE id = ? AND available_count > 0
 | 查询 | 索引 | type | key | rows_examined | query_cost |
 | --- | --- | --- | --- | --- | --- |
 | Q1 我的借阅记录 TOP10<br>`WHERE user_id=? AND status=? ORDER BY id DESC LIMIT 10` | 无（仅 `idx_user_id`） | ref | `idx_user_id` | 5,000 | 2443.00 |
-| Q1 同上 | **`idx_user_status_id`** | ref | `idx_user_status_id` | **3,333** | **2109.60** |
+| Q1 同上 | **`idx_user_status_id`** | ref | `idx_user_status_id` | **3,333** | **677.76** |
 | Q2 重复借阅检查<br>`WHERE user_id=? AND book_id=? AND status=?` | 无 | **index_merge** | `intersect(idx_user_id, idx_book_id)` | 1,601 | 1481.31 |
 | Q2 同上 | **`idx_book_status`** | ref | `idx_book_status` | **1** | **1.20** |
 | Q3 图书在借数<br>`WHERE book_id=? AND status=?` | 无（仅 `idx_book_id`） | ref | `idx_book_id` | 31,994 | 7841.80 |
@@ -226,7 +226,56 @@ WHERE id = ? AND available_count > 0
 2. **Q2**：没有联合索引时优化器只能退化成 `index_merge`（两个单列索引求交集），扫描 1,601 行；建 `(book_id, status)` 后**扫描行数从 1,601 降到 1**。
 3. **Q3**：`book_id` 选择性极低（全表只有 6 本书），单列索引要扫 31,994 行；`(book_id, status)` 直接定位到 1 行，且 `Extra` 显示 **`Using index`**——查询所需字段全在索引里，**无需回表**。
 
+> `rows_examined` 由索引与数据分布决定，可稳定复现；`query_cost` 是优化器基于采样的估算值，**多次执行会有波动**（同一查询在不同轮次测到 677.76 / 2109.60），因此判断索引效果应以后者以外的两个字段为准。
 **关于索引列顺序的实测结论**：曾尝试把 `(user_id, status, id)` 换成 `(user_id, book_id, status)`，结果 Q1 的扫描行数反而从 3,333 升到 5,000——因为 `book_id` 选择性太低，插在中间会破坏 `status` 的过滤。**说明索引列顺序必须由真实查询和真实数据分布决定，不能凭直觉排。**
+
+## 并发压测：验证"零超借"
+
+**测试目的**：证明借书接口在并发下不会超卖库存，即 `available_count > 0` 的条件更新确实起到了原子扣减的作用。
+
+### 测试设计
+
+| 项 | 值 |
+| --- | --- |
+| 并发用户数 | 200（`loadtest1` ~ `loadtest200`，各自独立账号） |
+| 目标图书 | `book_id = 3`，`total_count = 10`（即只有 10 本可借） |
+| 请求方式 | 200 个线程各调用一次 `POST /api/borrow/borrow` |
+| 同步方式 | **先并发登录拿到全部 token，再用同步屏障让 200 个借书请求同时发出** |
+
+**为什么必须用 200 个不同账号**：借书接口有"同一用户不能重复借阅同一本书"的业务校验，用同一个账号打 200 次只会得到 1 次成功 + 199 次业务拒绝，测不出并发扣减。
+
+**为什么要先登录再统一发压**：登录本身有耗时且不一致。如果边登录边借书，200 个请求会自然错开，测出来的是"顺序请求"而非"并发争抢"。先取齐 token、再用屏障同时释放，才能让 200 个请求真正撞在同一行库存上。
+
+### 实测结果
+
+| 指标 | 实测值 | 期望 |
+| --- | --- | --- |
+| 200 并发总耗时 | **284.6 ms** | —— |
+| 成功（`code=200`） | **10** | 恰好等于库存 10 |
+| 库存不足（`code=400`） | **190** | 200 − 10 |
+| 其他异常响应 | **0** | 0 |
+| `borrow_record` 未归还记录数 | **10** | ≤ 10 |
+| `borrow.available_count` | **0** | 0，且不得为负 |
+
+**结论：零超借。** 10 个并发请求成功扣减，190 个被库存条件拦下，最终库存精确归零且未出现负数，说明"判断库存"与"扣减库存"合并为一条 `UPDATE ... WHERE available_count > 0` 的设计在并发下有效；同时 `@Transactional` 保证了扣减与写入借阅记录的原子性（不存在"扣了库存但没生成借阅记录"的情况：记录数 10 与成功数 10 完全一致）。
+
+**已知局限**：本测试在单机单实例下进行，验证的是**数据库行锁**层面的并发安全。若部署多实例或分库分表，需要引入分布式锁或 Redis 预扣减，这一层尚未实现（见"已知不足"）。
+
+### 复现方式
+
+完整脚本见 `tools/loadtest/loadtest-borrow.ps1`：
+
+```powershell
+# 1. 造 200 个测试账号（用户名 loadtest1~loadtest200，密码复用 admin 的哈希，均为 123456）
+# 2. 重置环境（SQL）
+#    TRUNCATE TABLE borrow_record;
+#    UPDATE book SET total_count = 10, available_count = 10 WHERE id = 3;
+# 3. 运行压测脚本（默认 200 并发、目标 book_id=3）
+powershell -ExecutionPolicy Bypass -File tools/loadtest/loadtest-borrow.ps1
+# 4. 校验（SQL）
+#    SELECT COUNT(*) FROM borrow_record WHERE book_id=3 AND status=0;   -- 必须 = 10
+#    SELECT available_count FROM book WHERE id=3;                        -- 必须 = 0，且不得为负
+```
 
 ## 已知不足与后续改进方向
 

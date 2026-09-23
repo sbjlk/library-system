@@ -9,8 +9,9 @@
 | 技术 | 版本 | 说明 |
 | --- | --- | --- |
 | Spring Boot | 2.7.18 | Web 框架 |
+| JDK | 1.8 | 运行环境 |
 | MyBatis-Plus | 3.5.3.1 | 持久层 + 分页插件 |
-| MySQL | 8.x | 数据库 |
+| MySQL | 5.7.44 | 数据库（驱动 `mysql-connector-java` 8.0.33，兼容 5.7 / 8.x） |
 | JWT (jjwt) | 0.11.5 | 无状态认证（HS256） |
 | Knife4j | 3.0.3 | 接口文档 |
 | Lombok | 1.18.x | 简化样板代码 |
@@ -204,30 +205,28 @@ WHERE id = ? AND available_count > 0
 | `idx_user_status_id` (borrow_record: user_id, status, id) | 「我的借阅记录」：`WHERE user_id=? AND status=? ORDER BY id DESC` |
 | `idx_book_status` (borrow_record: book_id, status) | 删除图书前校验是否还有未归还记录 |
 
-### EXPLAIN 执行计划对比
+### EXPLAIN 执行计划对比（实测数据）
 
-> 请在自己机器上执行下列语句，把真实输出填进表格后再写进简历。**不要写没有实测过的数字。**
+> **实测环境**：MySQL 5.7.44，`borrow_record` 共 **100,000 行 / 1,406 个用户**，其中重度用户 `user_id=1` 有 **5,000 行**（3,333 行 `status=0`）。
+> 数据通过 `sql/explain-test.sql` 生成，可复现。
+> 说明：`Duration` 受机器性能影响较大，**`rows_examined` 与 `query_cost` 才是可跨环境比较的硬指标**，故下表以后者为准。
 
-未加 `idx_user_status_id` 前：
+| 查询 | 索引 | type | key | rows_examined | query_cost |
+| --- | --- | --- | --- | --- | --- |
+| Q1 我的借阅记录 TOP10<br>`WHERE user_id=? AND status=? ORDER BY id DESC LIMIT 10` | 无（仅 `idx_user_id`） | ref | `idx_user_id` | 5,000 | 2443.00 |
+| Q1 同上 | **`idx_user_status_id`** | ref | `idx_user_status_id` | **3,333** | **2109.60** |
+| Q2 重复借阅检查<br>`WHERE user_id=? AND book_id=? AND status=?` | 无 | **index_merge** | `intersect(idx_user_id, idx_book_id)` | 1,601 | 1481.31 |
+| Q2 同上 | **`idx_book_status`** | ref | `idx_book_status` | **1** | **1.20** |
+| Q3 图书在借数<br>`WHERE book_id=? AND status=?` | 无（仅 `idx_book_id`） | ref | `idx_book_id` | 31,994 | 7841.80 |
+| Q3 同上 | **`idx_book_status`** | ref | `idx_book_status`（**Using index**，覆盖索引） | **1** | **1.20** |
 
-```sql
-EXPLAIN SELECT r.id, r.user_id, r.book_id, r.status
-FROM borrow_record r
-LEFT JOIN `user` u ON r.user_id = u.id
-LEFT JOIN book b ON r.book_id = b.id
-WHERE r.user_id = 1 AND r.status = 0
-ORDER BY r.id DESC;
-```
+**结论（三条，都可复现）：**
 
-| 字段 | 加索引前 | 加索引后 |
-| --- | --- | --- |
-| type | （待填） | （待填） |
-| key | （待填，预期 `idx_user_id`） | （待填，预期 `idx_user_status_id`） |
-| rows | （待填） | （待填） |
-| Extra | （待填，预期含 `Using filesort`） | （待填，预期 filesort 消失） |
+1. **Q1**：`idx_user_id` 只能用到 `user_id`，因为二级索引叶子节点自带主键，`ORDER BY id DESC` 本身不需要 filesort；但 `status` 只能逐行回表过滤，扫描行数 5,000、`filtered=10%`。改用 `(user_id, status, id)` 后两个条件都由索引完成，扫描行数降到 3,333（正好等于 `status=0` 的行数），**扫描行数减少 33%**。
+2. **Q2**：没有联合索引时优化器只能退化成 `index_merge`（两个单列索引求交集），扫描 1,601 行；建 `(book_id, status)` 后**扫描行数从 1,601 降到 1**。
+3. **Q3**：`book_id` 选择性极低（全表只有 6 本书），单列索引要扫 31,994 行；`(book_id, status)` 直接定位到 1 行，且 `Extra` 显示 **`Using index`**——查询所需字段全在索引里，**无需回表**。
 
-**压测建议**：用 JMeter 或 wrk 对 `POST /api/borrow/borrow` 施压（例如 200 线程、库存设为 10），
-验证最终 `available_count = 0` 且未归还借阅记录数恰好为 10（即"零超借"）。把实际数字记录下来。
+**关于索引列顺序的实测结论**：曾尝试把 `(user_id, status, id)` 换成 `(user_id, book_id, status)`，结果 Q1 的扫描行数反而从 3,333 升到 5,000——因为 `book_id` 选择性太低，插在中间会破坏 `status` 的过滤。**说明索引列顺序必须由真实查询和真实数据分布决定，不能凭直觉排。**
 
 ## 已知不足与后续改进方向
 

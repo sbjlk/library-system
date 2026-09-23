@@ -1,5 +1,6 @@
 -- =====================================================
 -- 图书管理系统数据库初始化脚本
+-- 环境：MySQL 5.7+（脚本未使用 CTE，兼容 5.6 / 5.7 / 8.x）
 -- 说明：初始密码均为 123456，库中存储的是历史 MD5 摘要
 --       （e10adc3949ba59abbe56e057f20f883e）。
 --       首次登录成功后，应用会自动将其升级为 PBKDF2-HMAC-SHA256 加盐哈希，
@@ -61,10 +62,8 @@ CREATE TABLE `borrow_record` (
   `created_at`  DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at`  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
-  KEY `idx_user_id` (`user_id`),
-  KEY `idx_book_id` (`book_id`),
-  -- 覆盖"我的借阅记录"查询：WHERE user_id = ? AND status = ? ORDER BY id DESC
-  -- 让 status 过滤与 id 排序都走索引，消除回表与 filesort
+  -- 覆盖"我的借阅记录"分页查询：WHERE user_id = ? AND status = ? ORDER BY id DESC
+  -- 等值条件在前、排序字段在后，让过滤与排序共用一个索引
   KEY `idx_user_status_id` (`user_id`, `status`, `id`),
   -- 覆盖"某本书是否还有未归还记录"（删除图书前的校验）
   KEY `idx_book_status` (`book_id`, `status`)

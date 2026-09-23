@@ -1,0 +1,15 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+
+### 本地敏感配置（数据库密码、JWT 密钥）不要提交 ###
+src/main/resources/application-local.yml
+src/main/resources/application-local.properties
+
+### 日志 ###
+*.log

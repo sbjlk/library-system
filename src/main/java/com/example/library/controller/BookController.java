@@ -3,6 +3,7 @@ package com.example.library.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.example.library.annotation.RequireRole;
 import com.example.library.common.Result;
 import com.example.library.dto.BookDTO;
 import com.example.library.entity.Book;
@@ -57,6 +58,7 @@ public class BookController {
 
     @ApiOperation("新增图书")
     @PostMapping
+    @RequireRole("ADMIN")
     public Result<Void> add(@RequestBody @Valid BookDTO dto) {
         bookService.addBook(dto);
         return Result.success();
@@ -64,6 +66,7 @@ public class BookController {
 
     @ApiOperation("修改图书")
     @PutMapping("/{id}")
+    @RequireRole("ADMIN")
     public Result<Void> update(@PathVariable Long id, @RequestBody @Valid BookDTO dto) {
         bookService.updateBook(id, dto);
         return Result.success();
@@ -71,6 +74,7 @@ public class BookController {
 
     @ApiOperation("删除图书")
     @DeleteMapping("/{id}")
+    @RequireRole("ADMIN")
     public Result<Void> delete(@PathVariable Long id) {
         bookService.deleteBook(id);
         return Result.success();

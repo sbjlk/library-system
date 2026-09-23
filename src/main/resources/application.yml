@@ -7,8 +7,8 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/library?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
-    username: root
-    password: 123456
+    username: ${DB_USERNAME:your_username}
+    password: ${DB_PASSWORD:your_password}
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: GMT+8
@@ -31,6 +31,8 @@ knife4j:
   production: false
 
 # JWT 配置
+# secret 请勿硬编码提交到仓库：本地用环境变量 JWT_SECRET 覆盖，
+# 生产环境请使用至少 32 字节的随机字符串（例如 openssl rand -base64 48）。
 jwt:
-  secret: library-management-system-secret-key-please-change-it-in-production
+  secret: ${JWT_SECRET:local-dev-only-secret-please-override-by-env-variable}
   expire: 86400000   # 令牌有效期（毫秒），默认 24 小时

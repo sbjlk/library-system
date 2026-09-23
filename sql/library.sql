@@ -1,6 +1,9 @@
 -- =====================================================
 -- 图书管理系统数据库初始化脚本
--- 说明：默认密码均为 123456（MD5: e10adc3949ba59abbe56e057f20f883e）
+-- 说明：初始密码均为 123456，库中存储的是历史 MD5 摘要
+--       （e10adc3949ba59abbe56e057f20f883e）。
+--       首次登录成功后，应用会自动将其升级为 PBKDF2-HMAC-SHA256 加盐哈希，
+--       无需手动重置密码。
 -- =====================================================
 
 -- 设置连接字符集，避免中文乱码
@@ -16,7 +19,7 @@ USE library;
 CREATE TABLE `user` (
   `id`         BIGINT       NOT NULL AUTO_INCREMENT COMMENT '用户ID',
   `username`   VARCHAR(50)  NOT NULL COMMENT '用户名',
-  `password`   VARCHAR(100) NOT NULL COMMENT '密码(MD5)',
+  `password`   VARCHAR(255) NOT NULL COMMENT '密码（PBKDF2 加盐哈希，兼容历史 MD5）',
   `nickname`   VARCHAR(50)  DEFAULT NULL COMMENT '昵称',
   `role`       VARCHAR(20)  NOT NULL DEFAULT 'USER' COMMENT '角色 USER/ADMIN',
   `created_at` DATETIME     DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -59,7 +62,12 @@ CREATE TABLE `borrow_record` (
   `updated_at`  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   PRIMARY KEY (`id`),
   KEY `idx_user_id` (`user_id`),
-  KEY `idx_book_id` (`book_id`)
+  KEY `idx_book_id` (`book_id`),
+  -- 覆盖"我的借阅记录"查询：WHERE user_id = ? AND status = ? ORDER BY id DESC
+  -- 让 status 过滤与 id 排序都走索引，消除回表与 filesort
+  KEY `idx_user_status_id` (`user_id`, `status`, `id`),
+  -- 覆盖"某本书是否还有未归还记录"（删除图书前的校验）
+  KEY `idx_book_status` (`book_id`, `status`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '借阅记录表';
 
 -- -----------------------------------------------------

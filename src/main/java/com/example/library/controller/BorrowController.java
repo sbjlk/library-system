@@ -1,6 +1,7 @@
 package com.example.library.controller;
 
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.example.library.annotation.RequireRole;
 import com.example.library.common.Result;
 import com.example.library.common.UserContext;
 import com.example.library.dto.BorrowDTO;
@@ -44,8 +45,9 @@ public class BorrowController {
         return Result.success();
     }
 
-    @ApiOperation("分页查询借阅记录")
+    @ApiOperation("分页查询借阅记录（管理员可查全部，普通用户仅能查自己）")
     @GetMapping("/list")
+    @RequireRole("ADMIN")
     public Result<IPage<BorrowRecordVO>> list(@RequestParam(defaultValue = "1") Integer pageNum,
                                               @RequestParam(defaultValue = "10") Integer pageSize,
                                               @RequestParam(required = false) Long userId,

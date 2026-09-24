@@ -6,6 +6,7 @@ import com.example.library.common.ResultCode;
 import com.example.library.common.UserContext;
 import com.example.library.util.JwtUtil;
 import io.jsonwebtoken.Claims;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -27,6 +28,7 @@ import java.util.Arrays;
  * </ol>
  */
 @Component
+@Slf4j
 public class JwtInterceptor implements HandlerInterceptor {
 
     private static final String BEARER_PREFIX = "Bearer ";
@@ -50,6 +52,7 @@ public class JwtInterceptor implements HandlerInterceptor {
             token = token.substring(BEARER_PREFIX.length());
         }
         if (!StringUtils.hasText(token)) {
+            log.warn("[AUTH] 未携带 token: {} {}", request.getMethod(), request.getRequestURI());
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
 
@@ -60,6 +63,10 @@ public class JwtInterceptor implements HandlerInterceptor {
                     claims.get("username", String.class),
                     claims.get("role", String.class));
         } catch (Exception e) {
+            // 只把失败原因写进日志，不返回给前端：避免攻击者据此区分
+            // "签名错误 / 已过期 / 格式非法"，从而缩小爆破范围。
+            log.warn("[AUTH] token 校验失败: {} {} 原因={}",
+                    request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
             throw new BusinessException(ResultCode.UNAUTHORIZED);
         }
 
@@ -89,13 +96,25 @@ public class JwtInterceptor implements HandlerInterceptor {
 
         String role = UserContext.getRole();
         if (role == null || !Arrays.asList(requireRole.value()).contains(role)) {
+            // 角色不匹配：日志里记清"谁、想访问什么、需要什么角色"，
+            // 便于排查误配权限；但响应仍只返回通用的"无权限"。
+            log.warn("[AUTH] 角色校验失败: userId={} role={} 需要={} handler={}.{}",
+                    UserContext.getUserId(), role, Arrays.toString(requireRole.value()),
+                    handlerMethod.getBeanType().getSimpleName(), handlerMethod.getMethod().getName());
             throw new BusinessException(ResultCode.FORBIDDEN);
         }
     }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
-        // 必须清理：Tomcat 复用线程，ThreadLocal 不 remove() 会串用户数据
+        // 必须清理：Tomcat 复用线程，ThreadLocal 不 remove() 会串用户数据。
+        //
+        // 已证实：即使 preHandle 阶段抛异常（如 checkRole 抛出 403），
+        // Spring MVC 依然会回调本方法（实验日志：DELETE /api/book/1 时
+        // postHandle 未执行、afterCompletion 执行），因此清理是可靠的，
+        // 不存在"preHandle 抛异常导致 ThreadLocal 泄漏"的问题。
+        log.debug("[UserContext] afterCompletion 清理 userId={} uri={}",
+                UserContext.getUserId(), request.getRequestURI());
         UserContext.clear();
     }
 }

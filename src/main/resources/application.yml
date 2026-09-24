@@ -32,6 +32,12 @@ knife4j:
   enable: true
   production: false
 
+# 日志级别：将本项目日志开到 debug，以便观察认证失败原因、ThreadLocal 清理等关键动作。
+# 生产环境建议调回 info；日志中只记录 userId 等内部标识，绝不记录 password 或完整 token。
+logging:
+  level:
+    com.example.library: debug
+
 # JWT 配置
 # secret 请勿硬编码提交到仓库：本地用环境变量 JWT_SECRET 覆盖，
 # 生产环境请使用至少 32 字节的随机字符串（例如 openssl rand -base64 48）。

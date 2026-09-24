@@ -59,7 +59,7 @@ library-system
 
 3. **启动**：IDEA 中运行 `LibraryApplication`，或命令行 `mvn spring-boot:run`。
 
-4. **接口文档**：浏览器打开 `http://localhost:8080/doc.html`。
+4. **接口文档**：浏览器打开 <http://localhost:8080/doc.html>
 
 ## 测试账号
 

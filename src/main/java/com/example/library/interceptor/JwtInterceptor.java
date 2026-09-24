@@ -46,33 +46,47 @@ public class JwtInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        // 1. 认证：解析并校验 token
-        String token = request.getHeader("Authorization");
-        if (StringUtils.hasText(token) && token.startsWith(BEARER_PREFIX)) {
-            token = token.substring(BEARER_PREFIX.length());
-        }
-        if (!StringUtils.hasText(token)) {
-            log.warn("[AUTH] 未携带 token: {} {}", request.getMethod(), request.getRequestURI());
-            throw new BusinessException(ResultCode.UNAUTHORIZED);
-        }
-
         try {
-            Claims claims = jwtUtil.parseToken(token);
-            UserContext.set(
-                    Long.valueOf(claims.getSubject()),
-                    claims.get("username", String.class),
-                    claims.get("role", String.class));
-        } catch (Exception e) {
-            // 只把失败原因写进日志，不返回给前端：避免攻击者据此区分
-            // "签名错误 / 已过期 / 格式非法"，从而缩小爆破范围。
-            log.warn("[AUTH] token 校验失败: {} {} 原因={}",
-                    request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
-            throw new BusinessException(ResultCode.UNAUTHORIZED);
-        }
+            // 1. 认证：解析并校验 token
+            String token = request.getHeader("Authorization");
+            if (StringUtils.hasText(token) && token.startsWith(BEARER_PREFIX)) {
+                token = token.substring(BEARER_PREFIX.length());
+            }
+            if (!StringUtils.hasText(token)) {
+                log.warn("[AUTH] 未携带 token: {} {}", request.getMethod(), request.getRequestURI());
+                throw new BusinessException(ResultCode.UNAUTHORIZED);
+            }
 
-        // 2. 授权：校验接口声明的角色要求
-        checkRole(handler);
-        return true;
+            try {
+                Claims claims = jwtUtil.parseToken(token);
+                UserContext.set(
+                        Long.valueOf(claims.getSubject()),
+                        claims.get("username", String.class),
+                        claims.get("role", String.class));
+            } catch (Exception e) {
+                // 只把失败原因写进日志，不返回给前端：避免攻击者据此区分
+                // "签名错误 / 已过期 / 格式非法"，从而缩小爆破范围。
+                log.warn("[AUTH] token 校验失败: {} {} 原因={}",
+                        request.getMethod(), request.getRequestURI(), e.getClass().getSimpleName());
+                throw new BusinessException(ResultCode.UNAUTHORIZED);
+            }
+
+            // 2. 授权：校验接口声明的角色要求
+            checkRole(handler);
+            return true;
+
+        } catch (RuntimeException e) {
+            // 【关键】preHandle 抛异常时，Spring MVC 不会回调本拦截器的 afterCompletion。
+            // 原因：只有 preHandle 成功返回过的拦截器才会被记入"已完成"名单，
+            //      抛异常的这个拦截器不在名单里，因此 triggerAfterCompletion 会跳过它。
+            // 而此处 UserContext 可能已经被 set（例如 token 合法但角色不足），
+            // 若不清理，残留的用户身份会在 Tomcat 复用该线程时泄漏给下一个请求。
+            // 所以必须在这里主动清理，再原样抛出，交给全局异常处理器。
+            log.debug("[UserContext] preHandle 异常，兜底清理 userId={} uri={} 异常={}",
+                    UserContext.getUserId(), request.getRequestURI(), e.getClass().getSimpleName());
+            UserContext.clear();
+            throw e;
+        }
     }
 
     /**
@@ -107,12 +121,11 @@ public class JwtInterceptor implements HandlerInterceptor {
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception ex) {
-        // 必须清理：Tomcat 复用线程，ThreadLocal 不 remove() 会串用户数据。
+        // 清理 ThreadLocal，防止 Tomcat 复用线程时把上一个请求的用户身份泄漏给下一个请求。
         //
-        // 已证实：即使 preHandle 阶段抛异常（如 checkRole 抛出 403），
-        // Spring MVC 依然会回调本方法（实验日志：DELETE /api/book/1 时
-        // postHandle 未执行、afterCompletion 执行），因此清理是可靠的，
-        // 不存在"preHandle 抛异常导致 ThreadLocal 泄漏"的问题。
+        // 注意边界（已实测）：本方法只在 preHandle 成功返回过的情况下才会被 Spring MVC 回调。
+        // 若 preHandle 自身抛出异常（如角色不足返回 403），本方法不会被调用，
+        // 因此 preHandle 里另有一处兜底 clear()，两处共同保证任何路径下都会被清理。
         log.debug("[UserContext] afterCompletion 清理 userId={} uri={}",
                 UserContext.getUserId(), request.getRequestURI());
         UserContext.clear();
